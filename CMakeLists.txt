@@ -1,0 +1,10 @@
+cmake_minimum_required(VERSION 2.8)
+project(artx_tasks)
+
+file(GLOB APP_SOURCES *.c)
+foreach(sourcefile ${APP_SOURCES})
+    file(RELATIVE_PATH filename ${CMAKE_CURRENT_SOURCE_DIR} ${sourcefile})
+    string(REPLACE ".c" "" file ${filename})
+    add_executable(${file} ${sourcefile})
+    target_link_libraries(${file} ev)
+endforeach(sourcefile ${APP_SOURCES})
