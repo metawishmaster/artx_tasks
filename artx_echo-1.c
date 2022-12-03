@@ -19,7 +19,7 @@ void free_clients()
 	struct client *client = clients, *tmp;
 
 	while (client) {
-		printf("free %p\n", client);
+		printf("free %p\n", (void *)client);
 		tmp = client;
 		client = client->next;
 		free(tmp);
@@ -74,7 +74,7 @@ void read_cb(struct ev_loop *loop, struct ev_io *watcher, int revents)
 			clnt->next->prev = clnt->prev;
 		}
 
-		printf("client %p closed\n", clnt);
+		printf("client %p closed\n", (void *)clnt);
 		free(clnt);
 		return;
 	} else {
@@ -131,8 +131,6 @@ int main(int argc, char **argv)
 	struct ev_loop *loop;
 	struct ev_io w_accept;
 	struct sockaddr_in addr;
-	struct client client;
-	int addr_len = sizeof(addr);
 	int sock;
 	int opt = 1;
 
@@ -170,7 +168,7 @@ int main(int argc, char **argv)
 	ev_io_start(loop, &w_accept);
 
 	ev_loop(loop, 0);
-out:
+
 	printf("BYE\n");
 	return 0;
 }

@@ -196,7 +196,6 @@ void* thread_main(void *arg)
 	struct client clnt;
 	struct io_args *args;
 	struct sockaddr_in addr;
-	int addr_len = sizeof(addr);
 	int sock, opt = 1;
 
 	loop = ev_loop_new(0);
@@ -233,17 +232,15 @@ void* thread_main(void *arg)
 
 	unlink(THREAD_SOCKET);
 
-out:
 	return  NULL;
 }
 
-void read_cb(struct ev_loop* loop, struct ev_io* io, int revents)
+void read_cb(struct ev_loop* loop, __attribute__ ((unused)) struct ev_io* io, int revents)
 {
 	struct sockaddr_un addr, th_addr;
 	socklen_t sock_len = sizeof(th_addr);
 	char buffer[BUF_SZ], ch;
 	int i, j, fd, ret, len;
-	ssize_t read;
 
 	if (EV_ERROR & revents) {
 		perror("invalid event");
@@ -296,12 +293,9 @@ out:
 int main(int argc, char **argv)
 {
 	struct ev_loop *loop;
-	struct ev_io w_accept;
 	struct sockaddr_un addr;
-	struct client client;
 	struct io_args *io_args;
 	pthread_t thread = -1;
-	int addr_len = sizeof(addr);
 	int sock;
 	int opt = 1;
 
