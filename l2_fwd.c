@@ -40,7 +40,13 @@ int main(int argc, char *argv[])
 {
 	struct sockaddr_ll saddr, daddr;
 	int saddr_size, data_size, bytes_sent;
+	struct ethhdr *ehdr;
+	struct iphdr *ip;
+	struct udphdr *udp;
+	unsigned char *payload;
+	unsigned char ch;
 	unsigned char *buffer;
+	int i, j;
 
 	int sock_in = socket(AF_PACKET, SOCK_RAW, IPPROTO_UDP);
 	int sock_out = socket(AF_PACKET, SOCK_RAW, IPPROTO_UDP);
@@ -88,12 +94,12 @@ int main(int argc, char *argv[])
 			printf("Recvfrom error , failed to get packets\n");
 			return 1;
 		} else {
-			struct ethhdr *ehdr =  (struct ethhdr *)buffer;
-			struct iphdr *ip = (struct iphdr *)(ehdr + 1);
-			struct udphdr *udp = (struct udphdr *)(ip + 1);
-			int i = 0, j = ntohs(udp->len) - sizeof(struct udphdr) - 1;
-			unsigned char *payload;
-			unsigned char ch;
+			ehdr =  (struct ethhdr *)buffer;
+			ip = (struct iphdr *)(ehdr + 1);
+			udp = (struct udphdr *)(ip + 1);
+			i = 0;
+			j = ntohs(udp->len) - sizeof(struct udphdr) - 1;
+
 			printf("Received %d bytes\n", data_size);
 			printf("%x:%x:%x:%x:%x:%x -> %x:%x:%x:%x:%x:%x\n",
 				ehdr->h_source[0], ehdr->h_source[1], ehdr->h_source[2], ehdr->h_source[3], ehdr->h_source[4], ehdr->h_source[5],
@@ -112,7 +118,7 @@ int main(int argc, char *argv[])
 
 			udp->check = 0;
 			udp->check = csum(udp, sizeof(struct udphdr));
-			printf("as '%s'\n", payload + 1);
+			printf("as '%s'\n", payload);
 
 			bytes_sent = sendto(sock_out, buffer, data_size, 0, (struct sockaddr *)&daddr, sizeof(daddr));
 			if (bytes_sent < 0) {
