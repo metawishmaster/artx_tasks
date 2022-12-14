@@ -36,6 +36,7 @@ struct io_args {
 	struct sockaddr_ll *daddr;
 	char *if_in;
 	char *if_out;
+	struct ev_loop *loop;
 };
 
 struct client *clients = NULL;
@@ -212,12 +213,13 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 				ehdr->h_dest[0], ehdr->h_dest[1], ehdr->h_dest[2], ehdr->h_dest[3], ehdr->h_dest[4], ehdr->h_dest[5]);
 
 			if (!strncmp("quit", (const char *)payload, 4) && (ntohs(udp->len) == 13)) {
-				pass_to_main(io, buffer);
+				pass_to_main(io, payload);
+				printf("QUIT!\n");
 				ev_io_stop(loop, io);
 				ev_break(loop, EVBREAK_ALL);
-			//	ev_loop_destroy(loop);
-				free_clients();
-//				exit(0);
+				ev_loop_destroy(loop);
+				ev_io_stop(args->loop, &args->io);
+				ev_break(args->loop, EVBREAK_ALL);
 				return;
 			}
 
@@ -483,6 +485,7 @@ void* thread_main(void *arg)
 	ev_loop(loop, 0);
 
 	unlink(THREAD_SOCKET);
+	free(buffer);
 
 	return  NULL;
 }
@@ -558,7 +561,7 @@ out:
 		close(fd);
 	}
 //	printf("%s: EV_BREAK\n", __func__);
-//	ev_break(loop, EVBREAK_ONE);
+	ev_break(loop, EVBREAK_ONE);
 }
 
 int main(int argc, char **argv)
@@ -600,6 +603,7 @@ int main(int argc, char **argv)
 		goto out;
 	}
 
+	io_args->loop = loop;
 	io_args->main_fd = sock;
 	io_args->if_in = argv[1];
 	io_args->if_out = argv[2];
@@ -611,7 +615,7 @@ int main(int argc, char **argv)
 
 out:
 	pthread_join(thread, NULL);
-	ev_loop_destroy(loop);
+//	ev_loop_destroy(loop);
 	free(io_args);
 	unlink(MAIN_SOCKET);
 
