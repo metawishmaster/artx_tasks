@@ -100,6 +100,7 @@ int pass_to_main(struct ev_io *io, char *buff)
 	if (send(fd, buff, BUF_SZ, 0) == -1) {
 		perror("send");
 	}
+	if (strcmp(buff, "quit\n"))
 	recvfrom(fd, buff, BUF_SZ, 0, (struct sockaddr *)&addr_un, &addrlen);
 	printf("BUFF == '%s'\n", buff + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr));
 	close(fd);
@@ -213,13 +214,15 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 				ehdr->h_dest[0], ehdr->h_dest[1], ehdr->h_dest[2], ehdr->h_dest[3], ehdr->h_dest[4], ehdr->h_dest[5]);
 
 			if (!strncmp("quit", (const char *)payload, 4) && (ntohs(udp->len) == 13)) {
+				printf("QUIT\n");
 				pass_to_main(io, payload);
-				printf("QUIT!\n");
 				ev_io_stop(loop, io);
 				ev_break(loop, EVBREAK_ALL);
+			//	ev_loop_destroy(loop);
 				ev_loop_destroy(loop);
 				ev_io_stop(args->loop, &args->io);
 				ev_break(args->loop, EVBREAK_ALL);
+//				exit(0);
 				return;
 			}
 
@@ -352,6 +355,7 @@ void thread_accept_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 	add_client(client);
 }
 */
+int done = 0;
 void* thread_main(void *arg)
 {
 	struct ev_loop *loop;
@@ -484,9 +488,12 @@ void* thread_main(void *arg)
 
 	ev_loop(loop, 0);
 
-	unlink(THREAD_SOCKET);
 	free(buffer);
-
+	printf("THREAD FINISHED\n");
+	done = 1;
+	write(clnt.main_fd, "\0", 1);
+	write(clnt.sock_in, "\0", 1);
+	write(clnt.sock_out, "\0", 1);
 	return  NULL;
 }
 
@@ -499,7 +506,7 @@ void read_cb(struct ev_loop* loop, __attribute__ ((unused)) struct ev_io* io, in
 	socklen_t sock_len = sizeof(th_addr);
 	char buffer[BUF_SZ], ch, *payload;
 	int i, j, fd, ret, len;
-printf("inside of %s\n", __func__);
+//printf("inside of %s\n", __func__);
 
 	if (EV_ERROR & revents) {
 		perror("invalid event");
@@ -521,8 +528,8 @@ printf("inside of %s\n", __func__);
 	}
 //	len = recv(fd, buffer, BUF_SZ, 0);
 	len = recvfrom(fd, buffer, BUF_SZ, 0, (struct sockaddr *)&addr, &sock_len);
-	
-printf("%s got something, len = %d\n", __func__, len);
+
+//printf("%s got something, len = %d\n", __func__, len);
 	ehdr =  (struct ethhdr *)buffer;
 	ip = (struct iphdr *)(ehdr + 1);
 	udp = (struct udphdr *)((char *)ip + (ip->ihl << 2));
@@ -538,7 +545,7 @@ printf("%s got something, len = %d\n", __func__, len);
 		return;
 	}
 
-printf("%s: buffer = '%s', udp->len = %d\n", __func__, payload, ntohs(udp->len));
+//printf("%s: buffer = '%s', udp->len = %d\n", __func__, payload, ntohs(udp->len));
 	if (payload[j] == '\n')
 		j--;
 //	j = strlen(payload) - 1;
@@ -549,19 +556,23 @@ printf("%s: buffer = '%s', udp->len = %d\n", __func__, payload, ntohs(udp->len))
 		i++;
 		j--;
 	}
-printf("%s: buffer = '%s'\n", __func__, payload);
+//printf("%s: buffer = '%s'\n", __func__, payload);
 	payload[j + 1] = ch;
+if (!done) {
 	ret = sendto(fd, buffer, BUF_SZ, 0, (struct sockaddr *)&addr, sock_len);
 	if (ret < 0) {
 		perror("main sendto");
 	}
-
+}
 out:
 	if (fd >= 0) {
 		close(fd);
 	}
 //	printf("%s: EV_BREAK\n", __func__);
-	ev_break(loop, EVBREAK_ONE);
+	if (done) {
+		ev_break(loop, EVBREAK_ONE);
+		unlink(THREAD_SOCKET);
+	}
 }
 
 int main(int argc, char **argv)
@@ -602,20 +613,21 @@ int main(int argc, char **argv)
 		perror("malloc");
 		goto out;
 	}
-
+	bzero(io_args, sizeof(struct io_args));
 	io_args->loop = loop;
 	io_args->main_fd = sock;
 	io_args->if_in = argv[1];
 	io_args->if_out = argv[2];
 
 	ev_io_init(&io_args->io, read_cb, sock, EV_READ | EV_WRITE);
-	pthread_create(&thread, NULL, &thread_main, io_args);
+	pthread_create(&thread, NULL, thread_main, io_args);
 	ev_io_start(loop, &io_args->io);
+
 	ev_loop(loop, 0);
 
 out:
 	pthread_join(thread, NULL);
-//	ev_loop_destroy(loop);
+	ev_loop_destroy(loop);
 	free(io_args);
 	unlink(MAIN_SOCKET);
 
