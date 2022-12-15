@@ -6,6 +6,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <arpa/inet.h>
 #include <netinet/in.h>
 #include <net/ethernet.h>
 #include <netinet/ip.h>
@@ -24,6 +25,7 @@ struct client {
 	int sock_in;
 	int sock_out;
 	struct sockaddr_ll *daddr;
+	struct ifreq *ifr;
 	struct client *next;
 	struct client *prev;
 };
@@ -39,7 +41,16 @@ struct io_args {
 	struct ev_loop *loop;
 };
 
+struct pheader {
+	u_int32_t src_addr;
+	u_int32_t dst_addr;
+	u_int8_t pad;
+	u_int8_t proto;
+	u_int16_t pkt_length;
+};
+
 struct client *clients = NULL;
+int done = 0;
 
 void free_clients()
 {
@@ -101,7 +112,9 @@ int pass_to_main(struct ev_io *io, char *buff)
 		perror("send");
 	}
 	if (strcmp(buff, "quit\n"))
-	recvfrom(fd, buff, BUF_SZ, 0, (struct sockaddr *)&addr_un, &addrlen);
+		recvfrom(fd, buff, BUF_SZ, 0, (struct sockaddr *)&addr_un, &addrlen);
+	else
+		done = 1;
 	printf("BUFF == '%s'\n", buff + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr));
 	close(fd);
 
@@ -140,7 +153,7 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 	struct sockaddr_un addr_un;
 	struct client *clnt;
 //	8 + 65,507 // UDP + payload // 65535
-	char buffer[IPV4_FRAME_LEN];
+	char buffer[IPV4_FRAME_LEN], *pseudo;
 	ssize_t read;
 	struct io_args *args;
 	int fd;
@@ -159,6 +172,8 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 	struct udphdr *udp;
 	unsigned char *payload;
 	unsigned char ch;
+	struct pheader ph;
+	struct ifrec *ifr;
 	int i, j, uread;
 		saddr_size = sizeof(struct sockaddr);
 //		printf("%s: args->sock_in = %d\n", __func__, args->sock_in);
@@ -189,9 +204,9 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 				return;
 			}
 #endif
-			uint16_t orig_csum = ntohs(udp->check);
-			udp->check = 0;
-			udp->check = csum(udp, sizeof(struct udphdr) + udp->len);
+//			uint16_t orig_csum = ntohs(udp->check);
+//			udp->check = 0;
+//			udp->check = csum(udp, sizeof(struct udphdr) + udp->len);
 #if 0
 			if (orig_csum != udp->check) {
 				printf("CSUM %x != %x\n", orig_csum, udp->check);
@@ -221,7 +236,7 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 			//	ev_loop_destroy(loop);
 				ev_loop_destroy(loop);
 				ev_io_stop(args->loop, &args->io);
-				ev_break(args->loop, EVBREAK_ALL);
+//				ev_break(args->loop, EVBREAK_ALL);
 //				exit(0);
 				return;
 			}
@@ -236,8 +251,6 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 				j--;
 			}
 */
-			udp->check = 0;
-			udp->check = csum(udp, sizeof(struct udphdr) + udp->len);
 			printf("as '%s'\n", payload);
 			payload[j0 + 1] = ch;
 
@@ -313,9 +326,23 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 	printf("pass_to_main()...\n");
 	pass_to_main(io, buffer);
 	printf("send(read == %ld)...\n", read);
+	ph.src_addr = inet_addr("172.29.2.5");
+	ph.dst_addr = args->daddr->sll_addr;// .sin_addr.s_addr;
+	ph.pad = 0;
+	ph.proto = IPPROTO_UDP;
+	ph.pkt_length = htons(sizeof(struct udphdr) + udp->len);
+
+	int psize = sizeof(struct pheader) + sizeof(struct udphdr) + udp->len;
+	pseudo = malloc(psize);
+
+	memcpy(pseudo, (char *)&ph, sizeof(struct pheader));
+	memcpy(pseudo + sizeof(struct pheader), udp, sizeof(struct udphdr) + udp->len);
+
+	udp->check = csum((unsigned short *)pseudo, psize);
 	bytes_sent = sendto(args->sock_out, buffer, read, 0, (struct sockaddr *)daddr, sizeof(struct sockaddr_ll));
 	send(io->fd, buffer, read, 0);
 	bzero(buffer, read);
+	free(pseudo);
 	printf("after send()...\n");
 }
 /*
@@ -355,7 +382,6 @@ void thread_accept_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 	add_client(client);
 }
 */
-int done = 0;
 void* thread_main(void *arg)
 {
 	struct ev_loop *loop;
@@ -483,17 +509,15 @@ void* thread_main(void *arg)
 	clnt.sock_in = args->sock_in;
 	clnt.sock_out = args->sock_out;
 	clnt.daddr = &daddr;
+	clnt.ifr = &ifr;
 	ev_io_init(&clnt.io, thread_read_cb, args->sock_in, EV_READ | EV_WRITE);
 	ev_io_start(loop, &clnt.io);
 
 	ev_loop(loop, 0);
 
-	free(buffer);
 	printf("THREAD FINISHED\n");
 	done = 1;
-	write(clnt.main_fd, "\0", 1);
-	write(clnt.sock_in, "\0", 1);
-	write(clnt.sock_out, "\0", 1);
+	free(buffer);
 	return  NULL;
 }
 
