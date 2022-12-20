@@ -89,12 +89,13 @@ int pass_to_main(struct ev_io *io, char *buff)
 	socklen_t addrlen = sizeof(struct sockaddr);
 	int ret = -1, fd;
 
+	memset(&addr_un, 0, sizeof(struct sockaddr_un));
 	if ((fd = socket(AF_UNIX, SOCK_DGRAM, 0)) < 0) {
 		perror("socket");
 		goto out;
 	}
 
-	bzero(&addr_un, sizeof(addr_un));
+	bzero(&addr_un, sizeof(struct sockaddr_un));
 	addr_un.sun_family = AF_UNIX;
 	strcpy(addr_un.sun_path, THREAD_SOCKET);
 	unlink(THREAD_SOCKET);
@@ -106,7 +107,6 @@ int pass_to_main(struct ev_io *io, char *buff)
 	bzero(&addr_un, sizeof(addr_un));
 	addr_un.sun_family = AF_UNIX;
 	strcpy(addr_un.sun_path, MAIN_SOCKET);
-
 	if (connect(fd, (struct sockaddr *)&addr_un, sizeof(addr_un)) == -1) {
 		perror("connect");
 		goto out;
@@ -187,7 +187,7 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 {
 	struct sockaddr_un addr_un;
 	struct client *clnt = (struct client *)io;
-	char buffer[IPV4_FRAME_LEN], *pseudo;
+	char buffer[IPV4_FRAME_LEN], *pseudo, sender[16];
 	ssize_t read;
 	struct io_args *args;
 	int fd;
@@ -199,6 +199,7 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 	args = (struct io_args*)io;
 
 	struct sockaddr_ll *saddr = args->saddr, *daddr = args->daddr;
+	struct sockaddr_storage saddr_in;
 	int saddr_size, data_size, bytes_sent;
 	struct ethhdr *ehdr;
 	struct iphdr *ip;
@@ -206,9 +207,8 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 	char *payload, ch;
 	struct pheader ph;
 	int i, j, uread;
-	saddr_size = sizeof(struct sockaddr);
+	saddr_size = sizeof(struct sockaddr_ll);
 	read = recvfrom(args->sock_in, buffer, IPV4_FRAME_LEN, 0, (struct sockaddr *)&saddr, (socklen_t *)&saddr_size);
-
 	if (read < 0) {
 		perror("recvfrom");
 		printf("Recvfrom error , failed to get packets, errno = %d\n", errno);
@@ -220,16 +220,19 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 		payload = (char *)(udp + 1);
 
 		if (ntohs(ehdr->h_proto) != ETH_P_IP) {
-//				printf("h_proto(0x%x) != ETH_P_IP\n", ehdr->h_proto);
+//			printf("h_proto(0x%x) != ETH_P_IP\n", ntohs(ehdr->h_proto));
 			return;
 		}
 		if (ip->protocol != IPPROTO_UDP) {
-//				printf("protocol(0x%x) != IPPROTO_UDP\n", ip->protocol);
+//			printf("protocol(0x%x) != IPPROTO_UDP\n", ip->protocol);
 			return;
 		}
 
+		printf("%s ->",inet_ntoa(*((struct in_addr*)&ip->saddr)));
+		printf(" %s\n",inet_ntoa(*((struct in_addr*)&ip->daddr)));
+
 		i = 0;
-		j = ntohs(udp->len) - sizeof(struct udphdr)- 1;
+		j = ntohs(udp->len) - sizeof(struct udphdr);
 
 		long int j0 = j;
 		ch = payload[j + 1];
@@ -263,7 +266,8 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 	struct in_addr src, dst;
 	src.s_addr = ip->saddr;
 	dst.s_addr = ip->daddr;
-	printf("ip->saddr = %s, ip->daddr = %s\n", inet_ntoa(src), inet_ntoa(dst));
+	printf("ip->saddr = %s, ", inet_ntoa(src));
+	printf("ip->daddr = %s\n", inet_ntoa(dst));
 
 //	strncpy(clnt->ifr_in->ifr_name, "eth0", IFNAMSIZ - 1);
 	printf("clnt->ifr_in->ifr_name = '%s', clnt->ifr_out->ifr_name = %s\n", clnt->ifr_in->ifr_name, clnt->ifr_out->ifr_name);
@@ -310,14 +314,23 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 	printf("TMP_IFREQ.sin_addr = %s, ipa = %s\n",
 		inet_ntoa(((struct sockaddr_in *)&tmp_ifreq.ifr_addr)->sin_addr), ipa);
 #endif
+	ip->protocol = IPPROTO_UDP;
 	printf("pass_to_main()...\n");
 	pass_to_main(io, buffer);
 	printf("send(read == %ld)...\n", read);
-	ph.src_addr = ((struct sockaddr_in *)&clnt->ifr_out->ifr_addr)->sin_addr.s_addr;
-	ph.dst_addr = ip->daddr;
+	struct in_addr tmpaddr;
+	tmpaddr.s_addr = ip->saddr;
+	printf("ip->saddr = %s\n", inet_ntoa(tmpaddr));
+	tmpaddr.s_addr = ip->daddr;
+	printf("ip->daddr = %s\n", inet_ntoa(tmpaddr));
+	((struct sockaddr_in *)&saddr_in)->sin_addr.s_addr = ip->saddr;
+	inet_ntop(AF_INET, &((struct sockaddr_in*)&saddr_in)->sin_addr, sender, sizeof(sender));
+	printf("SENDER = %s\n", sender);
+	ph.src_addr = ((struct sockaddr_in*)&saddr_in)->sin_addr.s_addr;
+	ph.dst_addr = ((struct sockaddr_in *)&daddr)->sin_addr.s_addr;
 	ph.pad = 0;
 	ph.proto = IPPROTO_UDP;
-	ph.pkt_length = htons(sizeof(struct pheader) + ntohs(udp->len));
+	ph.pkt_length = sizeof(struct pheader) + ntohs(udp->len);
 
 	int psize = sizeof(struct pheader) + ntohs(udp->len);
 	pseudo = (char*)malloc(psize);
@@ -355,12 +368,12 @@ void* thread_main(void *arg)
 
 	printf("INSIDE THREAD\n");
 	args = (struct io_args *)arg;
-	args->sock_in = socket(AF_PACKET, SOCK_RAW, IPPROTO_RAW);
+	args->sock_in = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
 	if (args->sock_in == -1) {
 		perror("socket");
 		return NULL;
 	}
-	args->sock_out = socket(AF_PACKET, SOCK_RAW, IPPROTO_RAW);
+	args->sock_out = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
 	if (args->sock_out == -1) {
 		perror("socket");
 		return NULL;
@@ -376,6 +389,7 @@ void* thread_main(void *arg)
 	saddr.sll_protocol = htons(ETH_P_ALL);
 	saddr.sll_ifindex = if_nametoindex(args->if_in);
 	printf("args->sock_in = %d\n", args->sock_in);
+
 	if (bind(args->sock_in, (struct sockaddr *)&saddr, sizeof(saddr)) < 0) {
 		perror("bind failed");
 		close(args->sock_in);
@@ -410,6 +424,14 @@ void* thread_main(void *arg)
 		free(buffer);
 		return NULL;
 	}
+	ioctl(args->sock_in, SIOCGIFFLAGS, &ifr_in);
+	ifr_in.ifr_flags |= IFF_PROMISC;
+	if (ioctl(args->sock_in, SIOCSIFFLAGS, &ifr_in)) {
+		perror("ioctl");
+		close(args->sock_in);
+		free(buffer);
+		return NULL;
+	}
 
 	printf("sock_in on %s\n", inet_ntoa(((struct sockaddr_in *)&ifr_in.ifr_addr)->sin_addr));
 
@@ -439,6 +461,14 @@ void* thread_main(void *arg)
 	if (setsockopt(args->sock_out, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1) {
 		perror("setsockopt on sock_out");
 		close(args->sock_out);
+		free(buffer);
+		return NULL;
+	}
+	ioctl(args->sock_out, SIOCGIFFLAGS, &ifr_out);
+	ifr_out.ifr_flags |= IFF_PROMISC;
+	if (ioctl(args->sock_out, SIOCSIFFLAGS, &ifr_out)) {
+		perror("ioctl");
+		close(args->sock_in);
 		free(buffer);
 		return NULL;
 	}
@@ -486,6 +516,7 @@ void read_cb(struct ev_loop* loop, __attribute__ ((unused)) struct ev_io* io, in
 	}
 
 	memset(&addr, 0, sizeof(addr));
+	memset(&th_addr, 0, sizeof(th_addr));
 	addr.sun_family = AF_UNIX;
 	strcpy(addr.sun_path, MAIN_SOCKET);
 	unlink(MAIN_SOCKET);
