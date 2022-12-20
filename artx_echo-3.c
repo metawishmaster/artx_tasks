@@ -14,6 +14,8 @@
 #include <net/if.h>
 #include <sys/ioctl.h>
 #include <linux/if_packet.h>
+#include <ifaddrs.h>
+#include <netdb.h>
 
 #define MAIN_SOCKET "/tmp/main_socket"
 #define THREAD_SOCKET "/tmp/thread_socket"
@@ -25,8 +27,8 @@ struct client {
 	int main_fd;
 	int sock_in;
 	int sock_out;
-	struct ifreq *ifr_in, *ifr_out;
 	struct sockaddr_ll *saddr, *daddr;
+	struct ifreq *ifr_in, *ifr_out;
 	struct client *next;
 	struct client *prev;
 };
@@ -150,6 +152,37 @@ uint16_t csum(void *buffer, unsigned int n)
 	return ret;
 }
 
+int get_ip(char *iface, char *ip, struct sockaddr *addr)
+{
+	struct ifaddrs *ifaddr, *ifa;
+	int family, ret;
+	char host[NI_MAXHOST];
+
+	if (getifaddrs(&ifaddr) == -1) {
+		perror("getifaddrs");
+		return -1;
+	}
+
+	for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+		if (ifa->ifa_addr == NULL)
+			continue;
+
+		ret = getnameinfo(ifa->ifa_addr, sizeof(struct sockaddr_in), host, NI_MAXHOST, NULL, 0, NI_NUMERICHOST);
+
+		if ((strcmp(ifa->ifa_name, iface) == 0) && (ifa->ifa_addr->sa_family == AF_INET)) {
+			if (ret != 0) {
+				perror("getnameinfo");
+				return -1;
+			}
+			strcpy(ip, host);
+			memcpy(addr, ifa->ifa_addr, sizeof(struct sockaddr));
+		}
+	}
+
+	freeifaddrs(ifaddr);
+	return 0;
+}
+
 void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 {
 	struct sockaddr_un addr_un;
@@ -172,7 +205,6 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 	struct udphdr *udp;
 	char *payload, ch;
 	struct pheader ph;
-	struct ifrec *ifr;
 	int i, j, uread;
 	saddr_size = sizeof(struct sockaddr);
 	read = recvfrom(args->sock_in, buffer, IPV4_FRAME_LEN, 0, (struct sockaddr *)&saddr, (socklen_t *)&saddr_size);
@@ -227,7 +259,7 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 
 	if (read == 0)
 		return;
-
+#if 1
 	struct in_addr src, dst;
 	src.s_addr = ip->saddr;
 	dst.s_addr = ip->daddr;
@@ -243,15 +275,46 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 	clnt->ifr_out->ifr_addr.sa_family = AF_INET;
 	ioctl(clnt->sock_out, SIOCGIFADDR, clnt->ifr_out);
 */
-	printf("clnt->ifr_in->sin_addr = %s, clnt->ifr_out->sin_addr = %s\n",
-		inet_ntoa(((struct sockaddr_in *)&clnt->ifr_in->ifr_addr)->sin_addr),
-		inet_ntoa(((struct sockaddr_in *)&clnt->ifr_out->ifr_addr)->sin_addr));
+/*
+	int tmp = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+	struct ifreq tmp_ifreq;
+	memset(&tmp_ifreq, 0, sizeof(tmp_ifreq));
+	strncpy(tmp_ifreq.ifr_name, "eth5", IFNAMSIZ - 1);
+	printf("IFR_NAME = %s\n", tmp_ifreq.ifr_name);
+	tmp_ifreq.ifr_addr.sa_family = AF_INET;
+	ioctl(tmp, SIOCGIFADDR, &tmp_ifreq);
+*/
+	char in_addr[16], out_addr[16];
+	strcpy(in_addr, inet_ntoa(((struct sockaddr_in *)&clnt->ifr_in->ifr_addr)->sin_addr));
+	strcpy(out_addr, inet_ntoa(((struct sockaddr_in *)&clnt->ifr_out->ifr_addr)->sin_addr));
+	printf("clnt->ifr_in->sin_addr = %s, clnt->ifr_out->sin_addr = %s\n", in_addr, out_addr);
 
+/*
+	printf("clnt->ifr_in->sin_addr = %s, TMP_IFREQ.sin_addr = %s\n",
+		inet_ntoa(((struct sockaddr_in *)&clnt->ifr_in->ifr_addr)->sin_addr),
+		inet_ntoa(((struct sockaddr_in *)&tmp_ifreq.ifr_addr)->sin_addr));
+*/
+#endif
+#if 0
+	printf("clnt->ifr_in->ifr_name = '%s', clnt->ifr_out->ifr_name = %s\n", clnt->ifr_in->ifr_name, clnt->ifr_out->ifr_name);
+	struct ifreq tmp_ifreq;
+	struct sockaddr tmp_addr;
+	struct in_addr in_addr;
+	char ipa[16];
+	get_ip("eth5", ipa, &tmp_addr);
+	inet_aton(ipa, &in_addr);
+	((struct sockaddr_in *)&tmp_ifreq.ifr_addr)->sin_addr.s_addr = in_addr.s_addr;
+	printf("clnt->ifr_in->sin_addr = %s, TMP_IFREQ.sin_addr = %s, ipa = %s\n",
+		inet_ntoa(((struct sockaddr_in *)&clnt->ifr_in->ifr_addr)->sin_addr),
+		inet_ntoa(((struct sockaddr_in *)&tmp_ifreq.ifr_addr)->sin_addr), ipa);
+	printf("TMP_IFREQ.sin_addr = %s, ipa = %s\n",
+		inet_ntoa(((struct sockaddr_in *)&tmp_ifreq.ifr_addr)->sin_addr), ipa);
+#endif
 	printf("pass_to_main()...\n");
 	pass_to_main(io, buffer);
 	printf("send(read == %ld)...\n", read);
-	ph.src_addr = ip->saddr;
-	ph.dst_addr = ((struct sockaddr_in *)&clnt->ifr_out->ifr_addr)->sin_addr.s_addr;//ip->daddr;
+	ph.src_addr = ((struct sockaddr_in *)&clnt->ifr_out->ifr_addr)->sin_addr.s_addr;
+	ph.dst_addr = ip->daddr;
 	ph.pad = 0;
 	ph.proto = IPPROTO_UDP;
 	ph.pkt_length = htons(sizeof(struct pheader) + ntohs(udp->len));
@@ -290,6 +353,7 @@ void* thread_main(void *arg)
 	unsigned char *buffer;
 	int i, j;
 
+	printf("INSIDE THREAD\n");
 	args = (struct io_args *)arg;
 	args->sock_in = socket(AF_PACKET, SOCK_RAW, IPPROTO_RAW);
 	if (args->sock_in == -1) {
@@ -371,7 +435,6 @@ void* thread_main(void *arg)
 		free(buffer);
 		return NULL;
 	}
-	printf("sock_out on %s\n", inet_ntoa(((struct sockaddr_in *)&ifr_out.ifr_addr)->sin_addr));
 
 	if (setsockopt(args->sock_out, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1) {
 		perror("setsockopt on sock_out");
@@ -379,8 +442,7 @@ void* thread_main(void *arg)
 		free(buffer);
 		return NULL;
 	}
-
-	printf("INSIDE THREAD\n");
+	printf("sock_out on %s\n", inet_ntoa(((struct sockaddr_in *)&ifr_out.ifr_addr)->sin_addr));
 
 	printf("args->sock_in = %d\n", args->sock_in);
 	clnt.main_fd = args->main_fd;
@@ -525,7 +587,7 @@ int main(int argc, char **argv)
 	io_args->if_out = argv[2];
 
 	ev_io_init(&io_args->io, read_cb, sock, EV_READ | EV_WRITE);
-	pthread_create(&thread, NULL, thread_main, io_args);
+	pthread_create(&thread, NULL, &thread_main, io_args);
 	ev_io_start(loop, &io_args->io);
 
 	ev_loop(loop, 0);
