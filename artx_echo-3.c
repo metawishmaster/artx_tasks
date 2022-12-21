@@ -119,7 +119,7 @@ int pass_to_main(struct ev_io *io, char *buff)
 		recvfrom(fd, buff, BUF_SZ, 0, (struct sockaddr *)&addr_un, &addrlen);
 	else
 		done = 1;
-	printf("BUFF == '%s'\n", buff + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr));
+//	printf("BUFF == '%s'\n", buff + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr));
 	close(fd);
 
 	ret = 0;
@@ -314,20 +314,21 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 	printf("TMP_IFREQ.sin_addr = %s, ipa = %s\n",
 		inet_ntoa(((struct sockaddr_in *)&tmp_ifreq.ifr_addr)->sin_addr), ipa);
 #endif
-	ip->protocol = IPPROTO_UDP;
 	printf("pass_to_main()...\n");
 	pass_to_main(io, buffer);
 	printf("send(read == %ld)...\n", read);
-	struct in_addr tmpaddr;
-	tmpaddr.s_addr = ip->saddr;
-	printf("ip->saddr = %s\n", inet_ntoa(tmpaddr));
-	tmpaddr.s_addr = ip->daddr;
-	printf("ip->daddr = %s\n", inet_ntoa(tmpaddr));
-	((struct sockaddr_in *)&saddr_in)->sin_addr.s_addr = ip->saddr;
-	inet_ntop(AF_INET, &((struct sockaddr_in*)&saddr_in)->sin_addr, sender, sizeof(sender));
-	printf("SENDER = %s\n", sender);
-	ph.src_addr = ((struct sockaddr_in*)&saddr_in)->sin_addr.s_addr;
-	ph.dst_addr = ((struct sockaddr_in *)&daddr)->sin_addr.s_addr;
+
+	ip->protocol = IPPROTO_UDP;
+//	ip->saddr = ((struct sockaddr_in *)&clnt->ifr_out->ifr_addr)->sin_addr.s_addr;//((struct sockaddr_in *)&clnt->ifr_in->ifr_addr)->sin_addr.s_addr;
+	ip->daddr = ((struct sockaddr_in *)&clnt->ifr_out->ifr_addr)->sin_addr.s_addr;
+//	ip->daddr = ((struct sockaddr_in*)daddr)->sin_addr.s_addr;
+	ip->check = 0;
+	ip->tot_len = htons(sizeof(struct iphdr)) + udp->len;
+	ip->check = csum((unsigned short *)ip, ntohs(ip->tot_len));
+
+	ph.src_addr = ip->saddr; //((struct sockaddr_in *)&clnt->ifr_out->ifr_addr)->sin_addr.s_addr;
+	ph.dst_addr = ip->daddr;
+	printf("ph.ds print = %s\n", inet_ntoa(((struct sockaddr_in*)daddr)->sin_addr));
 	ph.pad = 0;
 	ph.proto = IPPROTO_UDP;
 	ph.pkt_length = udp->len;
@@ -340,6 +341,9 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 	memcpy(pseudo + sizeof(struct pheader), udp, ntohs(udp->len));
 
 	udp->check = csum((unsigned short *)pseudo, psize);
+	if (udp->check == 0)
+		udp->check = 0xffff;
+
 	bytes_sent = sendto(args->sock_out, buffer, read, 0, (struct sockaddr *)daddr, sizeof(struct sockaddr_ll));
 	send(io->fd, buffer, read, 0);
 	bzero(buffer, read);
