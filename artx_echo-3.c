@@ -253,10 +253,8 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 		}
 
 		printf("Trying to resend '%s'(%lu, %d)\n", payload, ntohs(udp->len) - sizeof(struct udphdr), ntohs(ip->ihl));
-		printf("[i, j] = [%d, %d]\n", i, j);
 		payload[j0 + 1] = ch;
 
-		printf("sendto data_size = %ld\n", read+ 0);
 
 	}
 
@@ -271,12 +269,7 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 
 	printf("clnt->ifr_in->ifr_name = '%s', clnt->ifr_out->ifr_name = %s\n", clnt->ifr_in->ifr_name, clnt->ifr_out->ifr_name);
 
-	printf("pass_to_main()...\n");
 	pass_to_main(io, buffer);
-	printf("send(read == %ld)... ip = %lu\n", read, sizeof(struct iphdr) + (ip->ihl << 2));
-
-	printf("ph.ds print = %s\n", inet_ntoa(*(struct in_addr *)&ip->saddr));
-	printf("ph.ds print = %s\n", inet_ntoa(*(struct in_addr *)&ip->daddr));
 
 	ip->protocol = IPPROTO_UDP;
 	ip->saddr = ((struct sockaddr_in *)&clnt->ifr_out->ifr_addr)->sin_addr.s_addr;
@@ -305,7 +298,6 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 	send(io->fd, buffer, read, 0);
 	bzero(buffer, read);
 	free(pseudo);
-	printf("after send()...\n");
 }
 
 void* thread_main(void *arg)
