@@ -330,7 +330,7 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 	ph.dst_addr = ((struct sockaddr_in *)&daddr)->sin_addr.s_addr;
 	ph.pad = 0;
 	ph.proto = IPPROTO_UDP;
-	ph.pkt_length = sizeof(struct pheader) + ntohs(udp->len);
+	ph.pkt_length = udp->len;
 
 	int psize = sizeof(struct pheader) + ntohs(udp->len);
 	pseudo = (char*)malloc(psize);
