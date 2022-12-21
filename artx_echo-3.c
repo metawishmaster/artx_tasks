@@ -262,58 +262,15 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 
 	if (read == 0)
 		return;
-#if 1
+
 	struct in_addr src, dst;
 	src.s_addr = ip->saddr;
 	dst.s_addr = ip->daddr;
 	printf("ip->saddr = %s, ", inet_ntoa(src));
 	printf("ip->daddr = %s\n", inet_ntoa(dst));
 
-//	strncpy(clnt->ifr_in->ifr_name, "eth0", IFNAMSIZ - 1);
 	printf("clnt->ifr_in->ifr_name = '%s', clnt->ifr_out->ifr_name = %s\n", clnt->ifr_in->ifr_name, clnt->ifr_out->ifr_name);
-/*
-	strncpy(clnt->ifr_out->ifr_name, "eth0", IFNAMSIZ - 1);
-	clnt->ifr_in->ifr_addr.sa_family = AF_INET;
-	ioctl(clnt->sock_in, SIOCGIFADDR, clnt->ifr_in);
-	strncpy(clnt->ifr_out->ifr_name, "eth5", IFNAMSIZ - 1);
-	clnt->ifr_out->ifr_addr.sa_family = AF_INET;
-	ioctl(clnt->sock_out, SIOCGIFADDR, clnt->ifr_out);
-*/
-/*
-	int tmp = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
-	struct ifreq tmp_ifreq;
-	memset(&tmp_ifreq, 0, sizeof(tmp_ifreq));
-	strncpy(tmp_ifreq.ifr_name, "eth5", IFNAMSIZ - 1);
-	printf("IFR_NAME = %s\n", tmp_ifreq.ifr_name);
-	tmp_ifreq.ifr_addr.sa_family = AF_INET;
-	ioctl(tmp, SIOCGIFADDR, &tmp_ifreq);
-*/
-	char in_addr[16], out_addr[16];
-	strcpy(in_addr, inet_ntoa(((struct sockaddr_in *)&clnt->ifr_in->ifr_addr)->sin_addr));
-	strcpy(out_addr, inet_ntoa(((struct sockaddr_in *)&clnt->ifr_out->ifr_addr)->sin_addr));
-	printf("clnt->ifr_in->sin_addr = %s, clnt->ifr_out->sin_addr = %s\n", in_addr, out_addr);
 
-/*
-	printf("clnt->ifr_in->sin_addr = %s, TMP_IFREQ.sin_addr = %s\n",
-		inet_ntoa(((struct sockaddr_in *)&clnt->ifr_in->ifr_addr)->sin_addr),
-		inet_ntoa(((struct sockaddr_in *)&tmp_ifreq.ifr_addr)->sin_addr));
-*/
-#endif
-#if 0
-	printf("clnt->ifr_in->ifr_name = '%s', clnt->ifr_out->ifr_name = %s\n", clnt->ifr_in->ifr_name, clnt->ifr_out->ifr_name);
-	struct ifreq tmp_ifreq;
-	struct sockaddr tmp_addr;
-	struct in_addr in_addr;
-	char ipa[16];
-	get_ip("eth5", ipa, &tmp_addr);
-	inet_aton(ipa, &in_addr);
-	((struct sockaddr_in *)&tmp_ifreq.ifr_addr)->sin_addr.s_addr = in_addr.s_addr;
-	printf("clnt->ifr_in->sin_addr = %s, TMP_IFREQ.sin_addr = %s, ipa = %s\n",
-		inet_ntoa(((struct sockaddr_in *)&clnt->ifr_in->ifr_addr)->sin_addr),
-		inet_ntoa(((struct sockaddr_in *)&tmp_ifreq.ifr_addr)->sin_addr), ipa);
-	printf("TMP_IFREQ.sin_addr = %s, ipa = %s\n",
-		inet_ntoa(((struct sockaddr_in *)&tmp_ifreq.ifr_addr)->sin_addr), ipa);
-#endif
 	printf("pass_to_main()...\n");
 	pass_to_main(io, buffer);
 	printf("send(read == %ld)... ip = %lu\n", read, sizeof(struct iphdr) + (ip->ihl << 2));
@@ -322,15 +279,12 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 	printf("ph.ds print = %s\n", inet_ntoa(*(struct in_addr *)&ip->daddr));
 
 	ip->protocol = IPPROTO_UDP;
-	ip->saddr = ((struct sockaddr_in *)&clnt->ifr_out->ifr_addr)->sin_addr.s_addr;//((struct sockaddr_in *)&clnt->ifr_in->ifr_addr)->sin_addr.s_addr;
-//	ip->daddr = ((struct sockaddr_in *)&clnt->ifr_out->ifr_addr)->sin_addr.s_addr;
-//	ip->daddr = ((struct sockaddr_in*)daddr)->sin_addr.s_addr;
+	ip->saddr = ((struct sockaddr_in *)&clnt->ifr_out->ifr_addr)->sin_addr.s_addr;
 	ip->check = 0;
-	ip->tot_len = htons(sizeof(struct iphdr) + ntohs(udp->len)); //htons(sizeof(struct iphdr)) + /*(ip->ihl << 2)*/ + udp->len;
-//	ip->check = csum((unsigned short *)ip, ntohs(ip->tot_len));
+	ip->tot_len = htons(sizeof(struct iphdr) + ntohs(udp->len));
 	ip->check = csum((unsigned short *)ip, sizeof(struct iphdr));
 
-	ph.src_addr = /*ip->saddr;*/ ((struct sockaddr_in *)&clnt->ifr_out->ifr_addr)->sin_addr.s_addr;
+	ph.src_addr = ((struct sockaddr_in *)&clnt->ifr_out->ifr_addr)->sin_addr.s_addr;
 	ph.dst_addr = ip->daddr;
 	ph.pad = 0;
 	ph.proto = IPPROTO_UDP;
