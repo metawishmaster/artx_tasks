@@ -316,19 +316,22 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 #endif
 	printf("pass_to_main()...\n");
 	pass_to_main(io, buffer);
-	printf("send(read == %ld)...\n", read);
+	printf("send(read == %ld)... ip = %lu\n", read, sizeof(struct iphdr) + (ip->ihl << 2));
+
+	printf("ph.ds print = %s\n", inet_ntoa(*(struct in_addr *)&ip->saddr));
+	printf("ph.ds print = %s\n", inet_ntoa(*(struct in_addr *)&ip->daddr));
 
 	ip->protocol = IPPROTO_UDP;
-//	ip->saddr = ((struct sockaddr_in *)&clnt->ifr_out->ifr_addr)->sin_addr.s_addr;//((struct sockaddr_in *)&clnt->ifr_in->ifr_addr)->sin_addr.s_addr;
-	ip->daddr = ((struct sockaddr_in *)&clnt->ifr_out->ifr_addr)->sin_addr.s_addr;
+	ip->saddr = ((struct sockaddr_in *)&clnt->ifr_out->ifr_addr)->sin_addr.s_addr;//((struct sockaddr_in *)&clnt->ifr_in->ifr_addr)->sin_addr.s_addr;
+//	ip->daddr = ((struct sockaddr_in *)&clnt->ifr_out->ifr_addr)->sin_addr.s_addr;
 //	ip->daddr = ((struct sockaddr_in*)daddr)->sin_addr.s_addr;
 	ip->check = 0;
-	ip->tot_len = htons(sizeof(struct iphdr)) + udp->len;
-	ip->check = csum((unsigned short *)ip, ntohs(ip->tot_len));
+	ip->tot_len = htons(sizeof(struct iphdr) + ntohs(udp->len)); //htons(sizeof(struct iphdr)) + /*(ip->ihl << 2)*/ + udp->len;
+//	ip->check = csum((unsigned short *)ip, ntohs(ip->tot_len));
+	ip->check = csum((unsigned short *)ip, sizeof(struct iphdr));
 
-	ph.src_addr = ip->saddr; //((struct sockaddr_in *)&clnt->ifr_out->ifr_addr)->sin_addr.s_addr;
+	ph.src_addr = /*ip->saddr;*/ ((struct sockaddr_in *)&clnt->ifr_out->ifr_addr)->sin_addr.s_addr;
 	ph.dst_addr = ip->daddr;
-	printf("ph.ds print = %s\n", inet_ntoa(((struct sockaddr_in*)daddr)->sin_addr));
 	ph.pad = 0;
 	ph.proto = IPPROTO_UDP;
 	ph.pkt_length = udp->len;
@@ -436,6 +439,9 @@ void* thread_main(void *arg)
 		free(buffer);
 		return NULL;
 	}
+//	memset(&ifr_in, 0, sizeof(ifr_in));
+	ioctl(args->sock_out, SIOCGIFFLAGS, &ifr_in);
+	printf("ift_in = %x, IFF_PROMISC = %d\n", ifr_in.ifr_flags, !!(IFF_PROMISC & ifr_in.ifr_flags));
 
 	printf("sock_in on %s\n", inet_ntoa(((struct sockaddr_in *)&ifr_in.ifr_addr)->sin_addr));
 
