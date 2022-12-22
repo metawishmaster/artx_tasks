@@ -16,6 +16,7 @@
 #include <linux/if_packet.h>
 #include <ifaddrs.h>
 #include <netdb.h>
+#include <ctype.h>
 
 #define MAIN_SOCKET "/tmp/main_socket"
 #define THREAD_SOCKET "/tmp/thread_socket"
@@ -55,6 +56,19 @@ struct pheader {
 
 struct client *clients = NULL;
 int done = 0;
+
+char *sane(char *str)
+{
+	static char static_buf[IPV4_FRAME_LEN];
+	int i = 0;
+
+	do {
+		static_buf[i] = isprint(str[i]) ? str[i] : '.';
+		i++;
+	} while (str[i]);
+
+	return static_buf;
+}
 
 void free_clients()
 {
@@ -119,7 +133,7 @@ int pass_to_main(struct ev_io *io, char *buff)
 		recvfrom(fd, buff, BUF_SZ, 0, (struct sockaddr *)&addr_un, &addrlen);
 	else
 		done = 1;
-//	printf("BUFF == '%s'\n", buff + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr));
+	printf("BUFF == '%s'\n", sane(buff + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr)));
 	close(fd);
 
 	ret = 0;
@@ -247,7 +261,7 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 		long int j0 = j;
 		ch = payload[j + 1];
 		payload[j + 1] = '\0';
-		printf("Received %ld bytes: '%s', udp->len = %d\n", read, payload, ntohs(udp->len));
+//		printf("Received %ld bytes: '%s', udp->len = %d\n", read, payload, ntohs(udp->len));
 		printf("%x:%x:%x:%x:%x:%x -> %x:%x:%x:%x:%x:%x\n",
 			ehdr->h_source[0], ehdr->h_source[1], ehdr->h_source[2], ehdr->h_source[3], ehdr->h_source[4], ehdr->h_source[5],
 			ehdr->h_dest[0], ehdr->h_dest[1], ehdr->h_dest[2], ehdr->h_dest[3], ehdr->h_dest[4], ehdr->h_dest[5]);
@@ -262,7 +276,7 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 			return;
 		}
 
-		printf("Trying to resend '%s'(%lu, %d)\n", payload, ntohs(udp->len) - sizeof(struct udphdr), ntohs(ip->ihl));
+		printf("Trying to resend '%s'(%lu, %d)\n", sane(payload), ntohs(udp->len) - sizeof(struct udphdr), ntohs(ip->ihl));
 		payload[j0 + 1] = ch;
 	}
 
