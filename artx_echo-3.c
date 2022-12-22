@@ -21,7 +21,6 @@
 #define MAIN_SOCKET "/tmp/main_socket"
 #define THREAD_SOCKET "/tmp/thread_socket"
 #define IPV4_FRAME_LEN 65535
-#define BUF_SZ IPV4_FRAME_LEN
 
 struct client {
 	ev_io io;
@@ -126,12 +125,12 @@ int pass_to_main(struct ev_io *io, char *buff)
 		goto err;
 	}
 
-	if (send(fd, buff, BUF_SZ, 0) == -1) {
+	if (send(fd, buff, IPV4_FRAME_LEN, 0) == -1) {
 		perror("send");
 		goto err;
 	}
 	if (strcmp(buff, "quit\n")) {
-		if (recvfrom(fd, buff, BUF_SZ, 0, (struct sockaddr *)&addr_un, &addrlen) == -1)
+		if (recvfrom(fd, buff, IPV4_FRAME_LEN, 0, (struct sockaddr *)&addr_un, &addrlen) == -1)
 			goto err;
 	} else
 		done = 1;
@@ -434,7 +433,7 @@ void read_cb(struct ev_loop* loop, __attribute__ ((unused)) struct ev_io* io, in
 	struct iphdr *ip;
 	struct udphdr *udp;
 	socklen_t sock_len = sizeof(th_addr);
-	char buffer[BUF_SZ], ch, *payload;
+	char buffer[IPV4_FRAME_LEN], ch, *payload;
 	int i, j, fd, ret;
 //printf("inside of %s\n", __func__);
 
@@ -458,8 +457,8 @@ void read_cb(struct ev_loop* loop, __attribute__ ((unused)) struct ev_io* io, in
 		goto bind_err;
 	}
 
-//	len = recv(fd, buffer, BUF_SZ, 0);
-	if (recvfrom(fd, buffer, BUF_SZ, 0, (struct sockaddr *)&addr, &sock_len) == -1) {
+//	len = recv(fd, buffer, IPV4_FRAME_LEN, 0);
+	if (recvfrom(fd, buffer, IPV4_FRAME_LEN, 0, (struct sockaddr *)&addr, &sock_len) == -1) {
 		perror("recvfrom");
 		goto bind_err;
 	}
@@ -495,7 +494,7 @@ void read_cb(struct ev_loop* loop, __attribute__ ((unused)) struct ev_io* io, in
 //printf("%s: buffer = '%s'\n", __func__, payload);
 	payload[j + 1] = ch;
 	if (!done) {
-		ret = sendto(fd, buffer, BUF_SZ, 0, (struct sockaddr *)&addr, sock_len);
+		ret = sendto(fd, buffer, IPV4_FRAME_LEN, 0, (struct sockaddr *)&addr, sock_len);
 		if (ret < 0) {
 			perror("main sendto");
 			goto bind_err;
