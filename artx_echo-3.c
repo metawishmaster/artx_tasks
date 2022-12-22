@@ -155,7 +155,7 @@ uint16_t csum(void *buffer, unsigned int n)
 int get_ip(char *iface, char *ip, struct sockaddr *addr)
 {
 	struct ifaddrs *ifaddr, *ifa;
-	int family, ret;
+	int ret;
 	char host[NI_MAXHOST];
 
 	if (getifaddrs(&ifaddr) == -1) {
@@ -185,12 +185,10 @@ int get_ip(char *iface, char *ip, struct sockaddr *addr)
 
 void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 {
-	struct sockaddr_un addr_un;
 	struct client *clnt = (struct client *)io;
-	char buffer[IPV4_FRAME_LEN], *pseudo, sender[16];
+	char buffer[IPV4_FRAME_LEN], *pseudo;
 	ssize_t read;
 	struct io_args *args;
-	int fd;
 
 	if (EV_ERROR & revents) {
 		perror("invalid event");
@@ -199,14 +197,13 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 	args = (struct io_args*)io;
 
 	struct sockaddr_ll *saddr = args->saddr, *daddr = args->daddr;
-	struct sockaddr_storage saddr_in;
-	int saddr_size, data_size, bytes_sent;
+	int saddr_size;
 	struct ethhdr *ehdr;
 	struct iphdr *ip;
 	struct udphdr *udp;
 	char *payload, ch;
 	struct pheader ph;
-	int i, j, uread;
+	int j;
 	saddr_size = sizeof(struct sockaddr_ll);
 	read = recvfrom(args->sock_in, buffer, IPV4_FRAME_LEN, 0, (struct sockaddr *)&saddr, (socklen_t *)&saddr_size);
 	if (read < 0) {
@@ -231,7 +228,6 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 		printf("%s ->",inet_ntoa(*((struct in_addr*)&ip->saddr)));
 		printf(" %s\n",inet_ntoa(*((struct in_addr*)&ip->daddr)));
 
-		i = 0;
 		j = ntohs(udp->len) - sizeof(struct udphdr);
 
 		long int j0 = j;
@@ -242,7 +238,7 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 			ehdr->h_source[0], ehdr->h_source[1], ehdr->h_source[2], ehdr->h_source[3], ehdr->h_source[4], ehdr->h_source[5],
 			ehdr->h_dest[0], ehdr->h_dest[1], ehdr->h_dest[2], ehdr->h_dest[3], ehdr->h_dest[4], ehdr->h_dest[5]);
 
-		if (!strncmp("quit", (const char *)payload, 4) && (ntohs(udp->len) == 13)) {
+		if (!strncasecmp("quit", (const char *)payload, 4) && (ntohs(udp->len) == 13)) {
 			printf("QUIT\n");
 			pass_to_main(io, payload);
 			ev_io_stop(loop, io);
@@ -254,8 +250,6 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 
 		printf("Trying to resend '%s'(%lu, %d)\n", payload, ntohs(udp->len) - sizeof(struct udphdr), ntohs(ip->ihl));
 		payload[j0 + 1] = ch;
-
-
 	}
 
 	if (read == 0)
@@ -294,7 +288,7 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 	if (udp->check == 0)
 		udp->check = 0xffff;
 
-	bytes_sent = sendto(args->sock_out, buffer, read, 0, (struct sockaddr *)daddr, sizeof(struct sockaddr_ll));
+	sendto(args->sock_out, buffer, read, 0, (struct sockaddr *)daddr, sizeof(struct sockaddr_ll));
 	send(io->fd, buffer, read, 0);
 	bzero(buffer, read);
 	free(pseudo);
@@ -305,19 +299,11 @@ void* thread_main(void *arg)
 	struct ev_loop *loop;
 	struct client clnt;
 	struct io_args *args;
-	struct sockaddr_in addr;
 	int opt = 1;
 
 	struct sockaddr_ll saddr, daddr;
-	int saddr_size, data_size, bytes_sent;
-	struct ethhdr *ehdr;
-	struct iphdr *ip;
-	struct udphdr *udp;
 	struct ifreq ifr_in, ifr_out;
-	unsigned char *payload;
-	unsigned char ch;
 	unsigned char *buffer;
-	int i, j;
 
 	printf("INSIDE THREAD\n");
 	args = (struct io_args *)arg;
@@ -458,7 +444,7 @@ void read_cb(struct ev_loop* loop, __attribute__ ((unused)) struct ev_io* io, in
 	struct udphdr *udp;
 	socklen_t sock_len = sizeof(th_addr);
 	char buffer[BUF_SZ], ch, *payload;
-	int i, j, fd, ret, len;
+	int i, j, fd, ret;
 //printf("inside of %s\n", __func__);
 
 	if (EV_ERROR & revents) {
@@ -481,7 +467,7 @@ void read_cb(struct ev_loop* loop, __attribute__ ((unused)) struct ev_io* io, in
 		goto out;
 	}
 //	len = recv(fd, buffer, BUF_SZ, 0);
-	len = recvfrom(fd, buffer, BUF_SZ, 0, (struct sockaddr *)&addr, &sock_len);
+	recvfrom(fd, buffer, BUF_SZ, 0, (struct sockaddr *)&addr, &sock_len);
 
 //printf("%s got something, len = %d\n", __func__, len);
 	ehdr =  (struct ethhdr *)buffer;
