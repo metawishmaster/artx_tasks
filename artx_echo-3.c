@@ -183,37 +183,6 @@ uint16_t csum(void *buffer, unsigned int n)
 	return ret;
 }
 
-int get_ip(char *iface, char *ip, struct sockaddr *addr)
-{
-	struct ifaddrs *ifaddr, *ifa;
-	char host[NI_MAXHOST];
-	int ret;
-
-	if (getifaddrs(&ifaddr) == -1) {
-		perror("getifaddrs");
-		return -1;
-	}
-
-	for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
-		if (ifa->ifa_addr == NULL)
-			continue;
-
-		ret = getnameinfo(ifa->ifa_addr, sizeof(struct sockaddr_in), host, NI_MAXHOST, NULL, 0, NI_NUMERICHOST);
-
-		if ((strcmp(ifa->ifa_name, iface) == 0) && (ifa->ifa_addr->sa_family == AF_INET)) {
-			if (ret != 0) {
-				perror("getnameinfo");
-				return -1;
-			}
-			strcpy(ip, host);
-			memcpy(addr, ifa->ifa_addr, sizeof(struct sockaddr));
-		}
-	}
-
-	freeifaddrs(ifaddr);
-	return 0;
-}
-
 void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 {
 	struct io_args *args = (struct io_args*)io;
