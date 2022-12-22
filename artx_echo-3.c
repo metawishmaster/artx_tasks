@@ -65,7 +65,7 @@ char *sane(char *str)
 	do {
 		static_buf[i] = isprint(str[i]) ? str[i] : '.';
 		i++;
-	} while (str[i]);
+	} while (i < IPV4_FRAME_LEN + 1 && str[i]);
 
 	return static_buf;
 }
@@ -99,8 +99,8 @@ void add_client(struct client *client)
 
 int pass_to_main(struct ev_io *io, char *buff)
 {
-	struct sockaddr_un addr_un;
 	socklen_t addrlen = sizeof(struct sockaddr);
+	struct sockaddr_un addr_un;
 	int ret = -1, fd;
 
 	memset(&addr_un, 0, sizeof(struct sockaddr_un));
@@ -115,7 +115,7 @@ int pass_to_main(struct ev_io *io, char *buff)
 	unlink(THREAD_SOCKET);
 	if (bind(fd, (struct sockaddr *)&addr_un, sizeof(addr_un)) < 0) {
 		perror("bind");
-		goto out;
+		goto err;
 	}
 
 	bzero(&addr_un, sizeof(addr_un));
@@ -123,31 +123,35 @@ int pass_to_main(struct ev_io *io, char *buff)
 	strcpy(addr_un.sun_path, MAIN_SOCKET);
 	if (connect(fd, (struct sockaddr *)&addr_un, sizeof(addr_un)) == -1) {
 		perror("connect");
-		goto out;
+		goto err;
 	}
 
 	if (send(fd, buff, BUF_SZ, 0) == -1) {
 		perror("send");
+		goto err;
 	}
-	if (strcmp(buff, "quit\n"))
-		recvfrom(fd, buff, BUF_SZ, 0, (struct sockaddr *)&addr_un, &addrlen);
-	else
+	if (strcmp(buff, "quit\n")) {
+		if (recvfrom(fd, buff, BUF_SZ, 0, (struct sockaddr *)&addr_un, &addrlen) == -1)
+			goto err;
+	} else
 		done = 1;
 	printf("BUFF == '%s'\n", sane(buff + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr)));
-	close(fd);
 
 	ret = 0;
+	goto out;
+err:
+	close(fd);
 out:
 	return ret;
 }
 
 uint16_t csum(void *buffer, unsigned int n)
 {
+	register unsigned long sum = 0;
 	void *orig_buf = NULL;
 	unsigned short byte;
+	const uint16_t *buf;
 	short ret;
-	register unsigned long sum = 0;
-	const uint16_t *buf; // = buffer;
 
 	if (n & 1) {
 		orig_buf = buffer;
@@ -182,8 +186,8 @@ uint16_t csum(void *buffer, unsigned int n)
 int get_ip(char *iface, char *ip, struct sockaddr *addr)
 {
 	struct ifaddrs *ifaddr, *ifa;
-	int ret;
 	char host[NI_MAXHOST];
+	int ret;
 
 	if (getifaddrs(&ifaddr) == -1) {
 		perror("getifaddrs");
@@ -212,25 +216,24 @@ int get_ip(char *iface, char *ip, struct sockaddr *addr)
 
 void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 {
+	struct io_args *args = (struct io_args*)io;
 	struct client *clnt = (struct client *)io;
+	struct sockaddr_ll *saddr = args->saddr;
+	struct sockaddr_ll *daddr = args->daddr;
 	char buffer[IPV4_FRAME_LEN], *pseudo;
+	struct ethhdr *ehdr;
+	struct udphdr *udp;
+	char *payload, ch;
+	struct pheader ph;
+	struct iphdr *ip;
+	int saddr_size;
 	ssize_t read;
-	struct io_args *args;
+	int j;
 
 	if (EV_ERROR & revents) {
 		perror("invalid event");
 		return;
 	}
-	args = (struct io_args*)io;
-
-	struct sockaddr_ll *saddr = args->saddr, *daddr = args->daddr;
-	int saddr_size;
-	struct ethhdr *ehdr;
-	struct iphdr *ip;
-	struct udphdr *udp;
-	char *payload, ch;
-	struct pheader ph;
-	int j;
 
 	saddr_size = sizeof(struct sockaddr_ll);
 	read = recvfrom(args->sock_in, buffer, IPV4_FRAME_LEN, 0, (struct sockaddr *)&saddr, (socklen_t *)&saddr_size);
@@ -261,7 +264,7 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 		long int j0 = j;
 		ch = payload[j + 1];
 		payload[j + 1] = '\0';
-//		printf("Received %ld bytes: '%s', udp->len = %d\n", read, payload, ntohs(udp->len));
+		printf("Received %ld bytes: '%s', udp->len = %d\n", read, sane(payload), ntohs(udp->len));
 		printf("%x:%x:%x:%x:%x:%x -> %x:%x:%x:%x:%x:%x\n",
 			ehdr->h_source[0], ehdr->h_source[1], ehdr->h_source[2], ehdr->h_source[3], ehdr->h_source[4], ehdr->h_source[5],
 			ehdr->h_dest[0], ehdr->h_dest[1], ehdr->h_dest[2], ehdr->h_dest[3], ehdr->h_dest[4], ehdr->h_dest[5]);
@@ -276,7 +279,7 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 			return;
 		}
 
-		printf("Trying to resend '%s'(%lu, %d)\n", sane(payload), ntohs(udp->len) - sizeof(struct udphdr), ntohs(ip->ihl));
+//		printf("Trying to resend '%s'(%lu, %d)\n", sane(payload), ntohs(udp->len) - sizeof(struct udphdr), ntohs(ip->ihl));
 		payload[j0 + 1] = ch;
 	}
 
@@ -324,30 +327,33 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 
 void* thread_main(void *arg)
 {
-	struct ev_loop *loop;
-	struct client clnt;
-	struct io_args *args;
-	int opt = 1;
-
 	struct sockaddr_ll saddr, daddr;
 	struct ifreq ifr_in, ifr_out;
 	unsigned char *buffer;
+	struct ev_loop *loop;
+	struct io_args *args;
+	struct client clnt;
+	int opt = 1;
 
 	printf("INSIDE THREAD\n");
 	args = (struct io_args *)arg;
 	args->sock_in = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
 	if (args->sock_in == -1) {
 		perror("socket");
-		return NULL;
+		goto out;
 	}
 	args->sock_out = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
 	if (args->sock_out == -1) {
 		perror("socket");
-		return NULL;
+		goto err_socket;
 	}
 	loop = ev_loop_new(0);
 
 	buffer = (unsigned char*)malloc(IP_MAXPACKET * sizeof(unsigned char));
+	if (!buffer) {
+		perror("malloc");
+		goto err_malloc;
+	}
 
 	bzero(buffer, IP_MAXPACKET * sizeof(unsigned char));
 
@@ -359,11 +365,8 @@ void* thread_main(void *arg)
 
 	if (bind(args->sock_in, (struct sockaddr *)&saddr, sizeof(saddr)) < 0) {
 		perror("bind failed");
-		close(args->sock_in);
-		free(buffer);
-		return NULL;
+		goto err_bind;
 	}
-
 
 	bzero(&daddr, sizeof(struct sockaddr_ll));
 	daddr.sll_family = AF_PACKET;
@@ -372,34 +375,26 @@ void* thread_main(void *arg)
 	printf("binding sock_out(%d) on %s(%d)\n", args->sock_out, args->if_out, daddr.sll_ifindex );
 	if (bind(args->sock_out, (struct sockaddr *)&daddr, sizeof(daddr)) < 0) {
 		perror("bind failed\n");
-		close(args->sock_out);
-		free(buffer);
-		return NULL;
+		goto err_bind;
 	}
 
 	bzero(&ifr_in, sizeof(ifr_in));
 	snprintf(ifr_in.ifr_name, sizeof(ifr_in.ifr_name), "%s", args->if_in);
 	if (ioctl(args->sock_in, SIOCGIFADDR, &ifr_in) == -1) {
 		perror("ioctl");
-		close(args->sock_out);
-		free(buffer);
-		return NULL;
+		goto err_bind;
 	}
 	if (setsockopt(args->sock_in, SOL_SOCKET, SO_BINDTODEVICE, (void *)&ifr_in, sizeof(ifr_in)) < 0) {
 		perror("setsockopt");
-		close(args->sock_out);
-		free(buffer);
-		return NULL;
+		goto err_bind;
 	}
 	ioctl(args->sock_in, SIOCGIFFLAGS, &ifr_in);
 	ifr_in.ifr_flags |= IFF_PROMISC;
 	if (ioctl(args->sock_in, SIOCSIFFLAGS, &ifr_in)) {
 		perror("ioctl");
-		close(args->sock_in);
-		free(buffer);
-		return NULL;
+		goto err_bind;
 	}
-//	memset(&ifr_in, 0, sizeof(ifr_in));
+
 	ioctl(args->sock_out, SIOCGIFFLAGS, &ifr_in);
 	printf("ift_in = %x, IFF_PROMISC = %d\n", ifr_in.ifr_flags, !!(IFF_PROMISC & ifr_in.ifr_flags));
 
@@ -407,9 +402,7 @@ void* thread_main(void *arg)
 
 	if (setsockopt(args->sock_in, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1) {
 		perror("setsockopt on sock_in");
-		close(args->sock_out);
-		free(buffer);
-		return NULL;
+		goto err_bind;
 	}
 
 	bzero(&ifr_out, sizeof(ifr_out));
@@ -417,30 +410,22 @@ void* thread_main(void *arg)
 	ifr_out.ifr_addr.sa_family = AF_INET;
 	if (ioctl(args->sock_out, SIOCGIFADDR, &ifr_out) == -1) {
 		perror("ioctl");
-		close(args->sock_out);
-		free(buffer);
-		return NULL;
+		goto err_bind;
 	}
 	if (setsockopt(args->sock_out, SOL_SOCKET, SO_BINDTODEVICE, (void *)&ifr_out, sizeof(ifr_out)) < 0) {
 		perror("setsockopt");
-		close(args->sock_out);
-		free(buffer);
-		return NULL;
+		goto err_bind;
 	}
 
 	if (setsockopt(args->sock_out, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1) {
 		perror("setsockopt on sock_out");
-		close(args->sock_out);
-		free(buffer);
-		return NULL;
+		goto err_bind;
 	}
 	ioctl(args->sock_out, SIOCGIFFLAGS, &ifr_out);
 	ifr_out.ifr_flags |= IFF_PROMISC;
 	if (ioctl(args->sock_out, SIOCSIFFLAGS, &ifr_out)) {
 		perror("ioctl");
-		close(args->sock_in);
-		free(buffer);
-		return NULL;
+		goto err_bind;
 	}
 	printf("sock_out on %s\n", inet_ntoa(((struct sockaddr_in *)&ifr_out.ifr_addr)->sin_addr));
 
@@ -461,6 +446,15 @@ void* thread_main(void *arg)
 	printf("THREAD FINISHED\n");
 	done = 1;
 	free(buffer);
+
+	goto out;
+err_bind:
+	free(buffer);
+err_malloc:
+	close(args->sock_out);
+err_socket:
+	close(args->sock_in);
+out:
 	return  NULL;
 }
 
@@ -492,11 +486,14 @@ void read_cb(struct ev_loop* loop, __attribute__ ((unused)) struct ev_io* io, in
 	unlink(MAIN_SOCKET);
 	if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
 		perror("bind");
-		goto out;
+		goto bind_err;
 	}
 
 //	len = recv(fd, buffer, BUF_SZ, 0);
-	recvfrom(fd, buffer, BUF_SZ, 0, (struct sockaddr *)&addr, &sock_len);
+	if (recvfrom(fd, buffer, BUF_SZ, 0, (struct sockaddr *)&addr, &sock_len) == -1) {
+		perror("recvfrom");
+		goto bind_err;
+	}
 
 //printf("%s got something, len = %d\n", __func__, len);
 	ehdr =  (struct ethhdr *)buffer;
@@ -512,7 +509,7 @@ void read_cb(struct ev_loop* loop, __attribute__ ((unused)) struct ev_io* io, in
 //	j = strlen(payload) - 1;
 	if (j < 0) {
 		printf("ntohs(udp->len=%d) - sizeof(struct udphdr) == %d\n", udp->len, j);
-		return;
+		goto bind_err;
 	}
 
 //printf("%s: buffer = '%s', udp->len = %d\n", __func__, payload, ntohs(udp->len));
@@ -528,17 +525,17 @@ void read_cb(struct ev_loop* loop, __attribute__ ((unused)) struct ev_io* io, in
 	}
 //printf("%s: buffer = '%s'\n", __func__, payload);
 	payload[j + 1] = ch;
-if (!done) {
-	ret = sendto(fd, buffer, BUF_SZ, 0, (struct sockaddr *)&addr, sock_len);
-	if (ret < 0) {
-		perror("main sendto");
+	if (!done) {
+		ret = sendto(fd, buffer, BUF_SZ, 0, (struct sockaddr *)&addr, sock_len);
+		if (ret < 0) {
+			perror("main sendto");
+			goto bind_err;
+		}
 	}
-}
+	goto out;
+bind_err:
+	close(fd);
 out:
-	if (fd >= 0) {
-		close(fd);
-	}
-//	printf("%s: EV_BREAK\n", __func__);
 	if (done) {
 		ev_break(loop, EVBREAK_ONE);
 		unlink(THREAD_SOCKET);
