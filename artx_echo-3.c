@@ -129,10 +129,20 @@ out:
 
 uint16_t csum(void *buffer, unsigned int n)
 {
+	void *orig_buf = NULL;
 	unsigned short byte;
 	short ret;
 	register unsigned long sum = 0;
-	const uint16_t *buf = buffer;
+	const uint16_t *buf; // = buffer;
+
+	if (n & 1) {
+		orig_buf = buffer;
+		buffer = malloc(n + 1);
+		memcpy(buffer, orig_buf, n);
+		((char *)buffer)[n] = '\0';
+		n++;
+	}
+	buf = buffer;
 
 	while (n > 1) {
 		sum += *buf++;
@@ -148,6 +158,9 @@ uint16_t csum(void *buffer, unsigned int n)
 	sum = (sum >> 16) + (sum & 0xffff);
 	sum = sum + (sum >> 16);
 	ret = (unsigned short)~sum;
+
+	if (orig_buf)
+		free(buffer);
 
 	return ret;
 }
@@ -204,6 +217,7 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 	char *payload, ch;
 	struct pheader ph;
 	int j;
+
 	saddr_size = sizeof(struct sockaddr_ll);
 	read = recvfrom(args->sock_in, buffer, IPV4_FRAME_LEN, 0, (struct sockaddr *)&saddr, (socklen_t *)&saddr_size);
 	if (read < 0) {
@@ -466,6 +480,7 @@ void read_cb(struct ev_loop* loop, __attribute__ ((unused)) struct ev_io* io, in
 		perror("bind");
 		goto out;
 	}
+
 //	len = recv(fd, buffer, BUF_SZ, 0);
 	recvfrom(fd, buffer, BUF_SZ, 0, (struct sockaddr *)&addr, &sock_len);
 
@@ -476,6 +491,7 @@ void read_cb(struct ev_loop* loop, __attribute__ ((unused)) struct ev_io* io, in
 	payload = (char *)(udp + 1);
 	i = 0;
 	j = ntohs(udp->len) - sizeof(struct udphdr) - 1;
+
 	ch = payload[j + 1];
 	payload[j + 1] = '\0';
 //	i = 0;
@@ -486,8 +502,8 @@ void read_cb(struct ev_loop* loop, __attribute__ ((unused)) struct ev_io* io, in
 	}
 
 //printf("%s: buffer = '%s', udp->len = %d\n", __func__, payload, ntohs(udp->len));
-	if (payload[j] == '\n')
-		j--;
+//	if (payload[j] == '\n')
+//		j--;
 //	j = strlen(payload) - 1;
 	while (i < j) {
 		ch = payload[i];
