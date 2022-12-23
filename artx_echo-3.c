@@ -137,7 +137,6 @@ int pass_to_main(struct ev_io *io, char *buff)
 	printf("BUFF == '%s'\n", sane(buff + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr)));
 
 	ret = 0;
-	goto out;
 err:
 	close(fd);
 out:
@@ -204,7 +203,7 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 	}
 
 	saddr_size = sizeof(struct sockaddr_ll);
-	read = recvfrom(args->sock_in, buffer, IPV4_FRAME_LEN, 0, (struct sockaddr *)&saddr, (socklen_t *)&saddr_size);
+	read = recvfrom(args->sock_in, buffer, IPV4_FRAME_LEN, 0, (struct sockaddr *)saddr, (socklen_t *)&saddr_size);
 	if (read < 0) {
 		perror("recvfrom");
 		printf("Recvfrom error , failed to get packets, errno = %d\n", errno);
@@ -329,6 +328,8 @@ void* thread_main(void *arg)
 	saddr.sll_family = AF_PACKET;
 	saddr.sll_protocol = htons(ETH_P_ALL);
 	saddr.sll_ifindex = if_nametoindex(args->if_in);
+
+
 	printf("args->sock_in = %d\n", args->sock_in);
 
 	if (bind(args->sock_in, (struct sockaddr *)&saddr, sizeof(saddr)) < 0) {
@@ -435,7 +436,6 @@ void read_cb(struct ev_loop* loop, __attribute__ ((unused)) struct ev_io* io, in
 	socklen_t sock_len = sizeof(th_addr);
 	char buffer[IPV4_FRAME_LEN], ch, *payload;
 	int i, j, fd, ret;
-//printf("inside of %s\n", __func__);
 
 	if (EV_ERROR & revents) {
 		perror("invalid event");
@@ -457,13 +457,11 @@ void read_cb(struct ev_loop* loop, __attribute__ ((unused)) struct ev_io* io, in
 		goto bind_err;
 	}
 
-//	len = recv(fd, buffer, IPV4_FRAME_LEN, 0);
 	if (recvfrom(fd, buffer, IPV4_FRAME_LEN, 0, (struct sockaddr *)&addr, &sock_len) == -1) {
 		perror("recvfrom");
 		goto bind_err;
 	}
 
-//printf("%s got something, len = %d\n", __func__, len);
 	ehdr =  (struct ethhdr *)buffer;
 	ip = (struct iphdr *)(ehdr + 1);
 	udp = (struct udphdr *)((char *)ip + (ip->ihl << 2));
@@ -473,17 +471,11 @@ void read_cb(struct ev_loop* loop, __attribute__ ((unused)) struct ev_io* io, in
 
 	ch = payload[j + 1];
 	payload[j + 1] = '\0';
-//	i = 0;
-//	j = strlen(payload) - 1;
 	if (j < 0) {
 		printf("ntohs(udp->len=%d) - sizeof(struct udphdr) == %d\n", udp->len, j);
 		goto bind_err;
 	}
 
-//printf("%s: buffer = '%s', udp->len = %d\n", __func__, payload, ntohs(udp->len));
-//	if (payload[j] == '\n')
-//		j--;
-//	j = strlen(payload) - 1;
 	while (i < j) {
 		ch = payload[i];
 		payload[i] = payload[j];
@@ -491,7 +483,7 @@ void read_cb(struct ev_loop* loop, __attribute__ ((unused)) struct ev_io* io, in
 		i++;
 		j--;
 	}
-//printf("%s: buffer = '%s'\n", __func__, payload);
+
 	payload[j + 1] = ch;
 	if (!done) {
 		ret = sendto(fd, buffer, IPV4_FRAME_LEN, 0, (struct sockaddr *)&addr, sock_len);
@@ -500,7 +492,6 @@ void read_cb(struct ev_loop* loop, __attribute__ ((unused)) struct ev_io* io, in
 			goto bind_err;
 		}
 	}
-	goto out;
 bind_err:
 	close(fd);
 out:
