@@ -18,30 +18,39 @@
 #include <netdb.h>
 #include <ctype.h>
 
-#define MAIN_SOCKET "/tmp/main_socket"
-#define THREAD_SOCKET "/tmp/thread_socket"
+//#define MAIN_SOCKET "/tmp/main_socket"
+//#define THREAD_SOCKET "/tmp/thread_socket"
 #define IPV4_FRAME_LEN 65535
+static char buffer[IPV4_FRAME_LEN];
 
 struct client {
 	ev_io io;
-	int main_fd;
 	int sock_in;
 	int sock_out;
 	struct sockaddr_ll *saddr, *daddr;
 	struct ifreq *ifr_in, *ifr_out;
+	pthread_mutex_t *mtx;
+	pthread_cond_t *cond;
+	unsigned char *buffer;
 	struct client *next;
 	struct client *prev;
+	pthread_cond_t *t_cond;
 };
 
 struct io_args {
 	ev_io io;
-	int main_fd;
 	int sock_in;
 	int sock_out;
 	struct sockaddr_ll *saddr;
 	struct sockaddr_ll *daddr;
 	char *if_in;
 	char *if_out;
+	pthread_mutex_t *mtx;
+	pthread_cond_t *cond;
+	unsigned char *buffer;
+	struct client *next;
+	struct client *prev;
+	pthread_cond_t *t_cond;
 	struct ev_loop *loop;
 };
 
@@ -84,6 +93,7 @@ void free_clients()
 
 void add_client(struct client *client)
 {
+	exit(0);
 	if (clients == NULL) {
 		clients = client;
 		clients->next = clients->prev = NULL;
@@ -98,10 +108,11 @@ void add_client(struct client *client)
 
 int pass_to_main(struct ev_io *io, char *buff)
 {
+	struct client *clnt = (struct client *)io;
 	socklen_t addrlen = sizeof(struct sockaddr);
-	struct sockaddr_un addr_un;
 	int ret = -1, fd;
 
+/*
 	memset(&addr_un, 0, sizeof(struct sockaddr_un));
 	if ((fd = socket(AF_UNIX, SOCK_DGRAM, 0)) < 0) {
 		perror("socket");
@@ -135,11 +146,18 @@ int pass_to_main(struct ev_io *io, char *buff)
 	} else
 		done = 1;
 	printf("BUFF == '%s'\n", sane(buff + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr)));
-
+*/
+	printf("PASS TO MAIN %p on %p\n", clnt->cond, clnt->mtx);
+//	pthread_mutex_lock(&clnt->mtx);
+//	strncpy(clnt->buffer, buffer, IPV4_FRAME_LEN);;
+//	strncpy(clnt->buffer, buff, IPV4_FRAME_LEN);
+	pthread_cond_signal(clnt->cond);
+//	pthread_mutex_unlock(&clnt->mtx);
 	ret = 0;
 err:
-	close(fd);
+	//close(fd);
 out:
+	printf("passed\n");
 	return ret;
 }
 
@@ -187,7 +205,7 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 	struct client *clnt = (struct client *)io;
 	struct sockaddr_ll *saddr = args->saddr;
 	struct sockaddr_ll *daddr = args->daddr;
-	char buffer[IPV4_FRAME_LEN], *pseudo;
+	char /*buffer[IPV4_FRAME_LEN],*/ *pseudo;
 	struct ethhdr *ehdr;
 	struct udphdr *udp;
 	char *payload, ch;
@@ -202,11 +220,17 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 		return;
 	}
 
+//	printf("%s lock on %p\n", __func__, &clnt->mtx);
+pthread_mutex_lock(clnt->mtx);
+//printf("GO?...\n");
+//pthread_cond_wait(clnt->t_cond, clnt->mtx);
+//printf("GO-GO-GO!!!\n");
 	saddr_size = sizeof(struct sockaddr_ll);
 	read = recvfrom(args->sock_in, buffer, IPV4_FRAME_LEN, 0, (struct sockaddr *)saddr, (socklen_t *)&saddr_size);
 	if (read < 0) {
 		perror("recvfrom");
 		printf("Recvfrom error , failed to get packets, errno = %d\n", errno);
+pthread_mutex_unlock(clnt->mtx);
 		return;
 	} else if (read > 0) {
 		ehdr =  (struct ethhdr *)buffer;
@@ -216,11 +240,11 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 
 		if (ntohs(ehdr->h_proto) != ETH_P_IP) {
 //			printf("h_proto(0x%x) != ETH_P_IP\n", ntohs(ehdr->h_proto));
-			return;
+			goto out;
 		}
 		if (ip->protocol != IPPROTO_UDP) {
 //			printf("protocol(0x%x) != IPPROTO_UDP\n", ip->protocol);
-			return;
+			goto out;
 		}
 
 		printf("%s ->",inet_ntoa(*((struct in_addr*)&ip->saddr)));
@@ -239,19 +263,22 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 		if (!strncasecmp("quit", (const char *)payload, 4) && (ntohs(udp->len) == 13)) {
 			printf("QUIT\n");
 			pass_to_main(io, payload);
+			pthread_cond_signal(clnt->cond);
 			ev_io_stop(loop, io);
 			ev_break(loop, EVBREAK_ALL);
 			ev_loop_destroy(loop);
 			ev_io_stop(args->loop, &args->io);
-			return;
+			goto out;
 		}
 
 //		printf("Trying to resend '%s'(%lu, %d)\n", sane(payload), ntohs(udp->len) - sizeof(struct udphdr), ntohs(ip->ihl));
 		payload[j0 + 1] = ch;
 	}
 
-	if (read == 0)
-		return;
+	if (read == 0) {
+		printf("empty read\n");
+		goto out;
+	}
 
 	struct in_addr src, dst;
 	src.s_addr = ip->saddr;
@@ -290,6 +317,11 @@ void thread_read_cb(struct ev_loop *loop, struct ev_io *io, int revents)
 	send(io->fd, buffer, read, 0);
 	bzero(buffer, read);
 	free(pseudo);
+
+//	return;
+out:
+	pthread_mutex_unlock(clnt->mtx);
+//	printf("%s unlocked on %p\n", __func__, &clnt->mtx);
 }
 
 void* thread_main(void *arg)
@@ -304,6 +336,7 @@ void* thread_main(void *arg)
 
 	printf("INSIDE THREAD\n");
 	args = (struct io_args *)arg;
+	printf("args->if_in = %s\n", args->if_in);
 	args->sock_in = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
 	if (args->sock_in == -1) {
 		perror("socket");
@@ -399,13 +432,22 @@ void* thread_main(void *arg)
 	printf("sock_out on %s\n", inet_ntoa(((struct sockaddr_in *)&ifr_out.ifr_addr)->sin_addr));
 
 	printf("args->sock_in = %d\n", args->sock_in);
-	clnt.main_fd = args->main_fd;
 	clnt.sock_in = args->sock_in;
 	clnt.sock_out = args->sock_out;
 	clnt.saddr = &saddr;
 	clnt.daddr = &daddr;
 	clnt.ifr_in = &ifr_in;
 	clnt.ifr_out = &ifr_out;
+	clnt.buffer = buffer;
+//	pthread_mutex_init(&clnt.mtx, 0);
+//	pthread_cond_init(&clnt.cond, 0);
+//	memcpy(&clnt.mtx, &args->mtx, sizeof(pthread_mutex_t));;
+//	memcpy(&clnt.cond, &args->cond, sizeof(pthread_cond_t));
+	clnt.mtx = args->mtx;
+	clnt.cond = args->cond;
+	clnt.t_cond = args->t_cond;
+
+	printf("&clnt.mtx = %p\n", clnt.mtx);
 
 	ev_io_init(&clnt.io, thread_read_cb, args->sock_in, EV_READ | EV_WRITE);
 	ev_io_start(loop, &clnt.io);
@@ -427,21 +469,21 @@ out:
 	return  NULL;
 }
 
-void read_cb(struct ev_loop* loop, __attribute__ ((unused)) struct ev_io* io, int revents)
+void read_cb(struct ev_loop* loop, struct ev_io* io, int revents)
 {
 	struct sockaddr_un addr, th_addr;
 	struct ethhdr *ehdr;
 	struct iphdr *ip;
 	struct udphdr *udp;
 	socklen_t sock_len = sizeof(th_addr);
-	char buffer[IPV4_FRAME_LEN], ch, *payload;
-	int i, j, fd, ret;
+	char /*buffer[IPV4_FRAME_LEN],*/ ch, *payload;
+	int i, j, fd, ret = 0;
 
 	if (EV_ERROR & revents) {
 		perror("invalid event");
 		return;
 	}
-
+/*
 	if ((fd = socket(AF_UNIX, SOCK_RAW, 0)) < 0) {
 		perror("socket");
 		goto out;
@@ -461,6 +503,16 @@ void read_cb(struct ev_loop* loop, __attribute__ ((unused)) struct ev_io* io, in
 		perror("recvfrom");
 		goto bind_err;
 	}
+*/
+	struct io_args *clnt = (struct io_args *)io;
+	printf("%s going to WAIT ON %p mtx==%p\n", __func__, clnt->cond, clnt->mtx);
+	pthread_mutex_lock(clnt->mtx);
+	printf("MUTEX LOCKED\n");
+	pthread_cond_wait(clnt->cond, clnt->mtx);
+	printf("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n");
+	printf("&clnt.mtx = %p\n", clnt->mtx);
+	printf("clnt->buffer == '%s'\n", clnt->buffer);
+//	strncpy(buffer, clnt->buffer, IPV4_FRAME_LEN);
 
 	ehdr =  (struct ethhdr *)buffer;
 	ip = (struct iphdr *)(ehdr + 1);
@@ -469,13 +521,13 @@ void read_cb(struct ev_loop* loop, __attribute__ ((unused)) struct ev_io* io, in
 	i = 0;
 	j = ntohs(udp->len) - sizeof(struct udphdr) - 1;
 
-	ch = payload[j + 1];
-	payload[j + 1] = '\0';
 	if (j < 0) {
 		printf("ntohs(udp->len=%d) - sizeof(struct udphdr) == %d\n", udp->len, j);
 		goto bind_err;
 	}
-
+	ch = payload[j + 1];
+	payload[j + 1] = '\0';
+	printf("REVERT[i=%d, j=%d] %s\n", i, j, sane(payload));
 	while (i < j) {
 		ch = payload[i];
 		payload[i] = payload[j];
@@ -483,28 +535,33 @@ void read_cb(struct ev_loop* loop, __attribute__ ((unused)) struct ev_io* io, in
 		i++;
 		j--;
 	}
+	printf("REVERTED = %s\n", sane(payload));
 
 	payload[j + 1] = ch;
 	if (!done) {
-		ret = sendto(fd, buffer, IPV4_FRAME_LEN, 0, (struct sockaddr *)&addr, sock_len);
+		printf("PAYLOAD = %s\n", sane(payload));
+//		ret = sendto(fd, buffer, IPV4_FRAME_LEN, 0, (struct sockaddr *)&addr, sock_len);
 		if (ret < 0) {
 			perror("main sendto");
 			goto bind_err;
 		}
 	}
 bind_err:
-	close(fd);
+//	close(fd);
 out:
 	if (done) {
 		ev_break(loop, EVBREAK_ONE);
-		unlink(THREAD_SOCKET);
+//		unlink(THREAD_SOCKET);
 	}
+	printf("%s: &clnt->mtx = %p\n", __func__, clnt->mtx);
+	pthread_cond_signal(clnt->t_cond);
+	pthread_mutex_unlock(clnt->mtx);
 }
 
 int main(int argc, char **argv)
 {
 	struct ev_loop *loop;
-	struct sockaddr_un addr;
+//	struct sockaddr_un addr;
 	struct io_args *io_args;
 	pthread_t thread = -1;
 	int sock;
@@ -523,6 +580,7 @@ int main(int argc, char **argv)
 	}
 
 	loop = EV_DEFAULT;
+/*
 	memset(&addr, 0, sizeof(addr));
 	addr.sun_family = AF_LOCAL;
 	strcpy(addr.sun_path, MAIN_SOCKET);
@@ -532,8 +590,8 @@ int main(int argc, char **argv)
 		return -1;
 	}
 
+*/
 	listen(sock, 10);
-
 	io_args = malloc(sizeof(struct io_args));
 	if (!io_args) {
 		perror("malloc");
@@ -541,9 +599,15 @@ int main(int argc, char **argv)
 	}
 	bzero(io_args, sizeof(struct io_args));
 	io_args->loop = loop;
-	io_args->main_fd = sock;
 	io_args->if_in = argv[1];
 	io_args->if_out = argv[2];
+	io_args->cond = (pthread_cond_t *)malloc(sizeof(pthread_cond_t));
+	io_args->t_cond = (pthread_cond_t *)malloc(sizeof(pthread_cond_t));
+	io_args->mtx = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+	io_args->buffer = buffer; //(unsigned char *)malloc(IPV4_FRAME_LEN);
+	pthread_cond_init(io_args->cond, 0);
+	pthread_cond_init(io_args->t_cond, 0);
+	pthread_mutex_init(io_args->mtx, 0);
 
 	ev_io_init(&io_args->io, read_cb, sock, EV_READ | EV_WRITE);
 	pthread_create(&thread, NULL, &thread_main, io_args);
@@ -554,8 +618,14 @@ int main(int argc, char **argv)
 out:
 	pthread_join(thread, NULL);
 	ev_loop_destroy(loop);
+	pthread_mutex_destroy(io_args->mtx);
+	free(io_args->mtx);
+	pthread_cond_destroy(io_args->cond);
+	free(io_args->cond);
+	pthread_cond_destroy(io_args->t_cond);
+	free(io_args->t_cond);
 	free(io_args);
-	unlink(MAIN_SOCKET);
+//	unlink(MAIN_SOCKET);
 
 	return 0;
 }
